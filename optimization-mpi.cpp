@@ -12,6 +12,8 @@
 #include <iterator>
 #include <string>
 #include <stdexcept>
+#include <mpi.h>
+
 #include "interval.h"
 #include "functions.h"
 #include "minimizer.h"
@@ -38,7 +40,8 @@ void minimize(itvfun f,  // Function to minimize
 	      const interval& y, // Current bounds for 2nd dimension
 	      double threshold,  // Threshold at which we should stop splitting
 	      double& min_ub,  // Current minimum upper bound
-	      minimizer_list& ml) // List of current minimizers
+	      minimizer_list& ml,	// List of current minimizers
+		  bool openMP) 		//use openMP
 {
   interval fxy = f(x,y);
   
@@ -75,55 +78,84 @@ void minimize(itvfun f,  // Function to minimize
 }
 
 
-int main(void)
+int main(int argc,char* argv[])
 {
-  cout.precision(16);
-  // By default, the currently known upper bound for the minimizer is +oo
-  double min_ub = numeric_limits<double>::infinity();
-  // List of potential minimizers. They may be removed from the list
-  // if we later discover that their smallest minimum possible is 
-  // greater than the new current upper bound
-  minimizer_list minimums;
-  // Threshold at which we should stop splitting a box
-  double precision;
+	//MPI
+	int numprocs, rank, namelen;
+	char processor_name[MPI_MAX_PROCESSOR_NAME];
 
-  // Name of the function to optimize
-  string choice_fun;
+	MPI_Init(&argc, &argv);
 
-  // The information on the function chosen (pointer and initial box)
-  opt_fun_t fun;
-  
-  bool good_choice;
+	MPI_Comm_size(MPI_COMM_WORLD, &numprocs ) ;
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank ) ;
+	MPI_Get_processor_name( processor_name , &namelen ) ;
 
-  // Asking the user for the name of the function to optimize
-  do {
-    good_choice = true;
+	cout.precision(16);
+	// By default, the currently known upper bound for the minimizer is +oo
+	double min_ub = numeric_limits<double>::infinity();
+	// List of potential minimizers. They may be removed from the list
+	// if we later discover that their smallest minimum possible is 
+	// greater than the new current upper bound
+	minimizer_list minimums;
+	// Threshold at which we should stop splitting a box
+	double precision;
 
-    cout << "Which function to optimize?\n";
-    cout << "Possible choices: ";
-    for (auto fname : functions) {
-      cout << fname.first << " ";
-    }
-    cout << endl;
-    cin >> choice_fun;
-    
-    try {
-      fun = functions.at(choice_fun);
-    } catch (out_of_range) {
-      cerr << "Bad choice" << endl;
-      good_choice = false;
-    }
-  } while(!good_choice);
+	// Name of the function to optimize
+	string choice_fun;
 
-  // Asking for the threshold below which a box is not split further
-  cout << "Precision? ";
-  cin >> precision;
-  
-  minimize(fun.f,fun.x,fun.y,precision,min_ub,minimums);
-  
-  // Displaying all potential minimizers
-  copy(minimums.begin(),minimums.end(),
-       ostream_iterator<minimizer>(cout,"\n"));    
-  cout << "Number of minimizers: " << minimums.size() << endl;
-  cout << "Upper bound for minimum: " << min_ub << endl;
+	// The information on the function chosen (pointer and initial box)
+	opt_fun_t fun;
+
+	pair<interval, interval> p[4];
+	
+
+	if (rank == 0){
+		bool good_choice;
+		// Asking the user for the name of the function to optimize
+		do {
+			good_choice = true;
+
+			cout << "Which function to optimize?\n";
+			cout << "Possible choices: ";
+			for (auto fname : functions) {
+			  cout << fname.first << " ";
+			}
+			cout << endl;
+			cin >> choice_fun;
+
+			try {
+			  fun = functions.at(choice_fun);
+			} catch (out_of_range) {
+			  cerr << "Bad choice" << endl;
+			  good_choice = false;
+			}
+		} while(!good_choice);
+
+		// Asking for the threshold below which a box is not split further
+		cout << "Precision? ";
+		cin >> precision;
+
+		interval xl, xr, yl, yr;
+		split_box(fun.x,fun.y,xl,xr,yl,yr);
+
+		p[0] = make_pair(xl,yl);
+		p[1] = make_pair(xl,yr);
+		p[2] = make_pair(xr,yl);
+		p[3] = make_pair(xr,yr);
+
+	}
+  	
+	MPI_Bcast(&precision, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+	MPI_Bcast(&p, 4*sizeof(pair<interval,interval>), MPI_BYTE, 0, MPI_COMM_WORLD);
+	MPI_Bcast(&fun, 1, sizeof(opt_fun_t), 0, MPI_COMM_WORLD);
+	
+	minimize(fun.f,p[rank].first, p[rank].second,precision,min_ub,minimums, true);
+	  
+	// Displaying all potential minimizers
+	copy(minimums.begin(),minimums.end(),
+	ostream_iterator<minimizer>(cout,"\n"));    
+	cout << "Number of minimizers: " << minimums.size() << endl;
+  	cout << "Upper bound for minimum: " << min_ub << endl;
+
+	MPI_Finalize();
 }
