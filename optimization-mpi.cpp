@@ -1,22 +1,4 @@
-/*
-  Branch and bound algorithm to find the minimum of continuous binary 
-  functions using interval arithmetic.
-
-  Sequential version
-
-  Author: Frederic Goualard <Frederic.Goualard@univ-nantes.fr>
-  v. 1.0, 2013-02-15
-*/
-
-#include <iostream>
-#include <iterator>
-#include <string>
-#include <stdexcept>
 #include <mpi.h>
-
-#include "interval.h"
-#include "functions.h"
-#include "minimizer.h"
 
 using namespace std;
 
@@ -40,8 +22,8 @@ void minimize(itvfun f,  // Function to minimize
 	      const interval& y, // Current bounds for 2nd dimension
 	      double threshold,  // Threshold at which we should stop splitting
 	      double& min_ub,  // Current minimum upper bound
-	      minimizer_list& ml,	// List of current minimizers
-		  bool openMP) 		//use openMP
+	      minimizer_list& ml, // List of current minimizers
+		  bool use_mpi) 
 {
   interval fxy = f(x,y);
   
@@ -71,10 +53,31 @@ void minimize(itvfun f,  // Function to minimize
   interval xl, xr, yl, yr;
   split_box(x,y,xl,xr,yl,yr);
 
-  minimize(f,xl,yl,threshold,min_ub,ml);
-  minimize(f,xl,yr,threshold,min_ub,ml);
-  minimize(f,xr,yl,threshold,min_ub,ml);
-  minimize(f,xr,yr,threshold,min_ub,ml);
+	if (use_mpi){	
+		int rank;
+
+		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	
+		double local_min_ub = min_ub;
+		minimizer_list& local_ml = ml;
+		if (rank==0)
+	  		minimize(f,xl,yl,threshold,local_min_ub, local_ml, false);
+	  	if (rank==1)
+			minimize(f,xl,yr,threshold,local_min_ub, local_ml, false);
+		if (rank==2)
+	  		minimize(f,xr,yl,threshold,local_min_ub, local_ml, false);
+		if (rank==3)
+	  		minimize(f,xr,yr,threshold,local_min_ub, local_ml, false);
+
+		MPI_Reduce(&local_min_ub, &min_ub, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+
+	}
+	else{
+	  minimize(f,xl,yl,threshold,min_ub,ml, false);
+	  minimize(f,xl,yr,threshold,min_ub,ml, false);
+	  minimize(f,xr,yl,threshold,min_ub,ml, false);
+	  minimize(f,xr,yr,threshold,min_ub,ml, false);
+	}
 }
 
 
