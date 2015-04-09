@@ -93,6 +93,9 @@ int main(int argc,char* argv[])
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank ) ;
 	MPI_Get_processor_name( processor_name , &namelen ) ;
 
+	// OMP Initialization
+	omp_set_num_threads(4);
+
 	cout.precision(16);
 	// By default, the currently known upper bound for the minimizer is +oo
 	double min_ub = numeric_limits<double>::infinity();
@@ -109,7 +112,7 @@ int main(int argc,char* argv[])
 	// The information on the function chosen (pointer and initial box)
 	opt_fun_t fun;
 
-	pair<interval, interval> p[4];
+	pair<interval, interval> carre[4];
 	
 
 	if (rank == 0){
@@ -141,19 +144,38 @@ int main(int argc,char* argv[])
 		interval xl, xr, yl, yr;
 		split_box(fun.x,fun.y,xl,xr,yl,yr);
 
-		p[0] = make_pair(xl,yl);
-		p[1] = make_pair(xl,yr);
-		p[2] = make_pair(xr,yl);
-		p[3] = make_pair(xr,yr);
+		carre[0] = make_pair(xl,yl);
+		carre[1] = make_pair(xl,yr);
+		carre[2] = make_pair(xr,yl);
+		carre[3] = make_pair(xr,yr);
 
-	}
-  	
-	MPI_Bcast(&precision, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-	MPI_Bcast(&p, 4*sizeof(pair<interval,interval>), MPI_BYTE, 0, MPI_COMM_WORLD);
-	MPI_Bcast(&fun, 1, sizeof(opt_fun_t), 0, MPI_COMM_WORLD);
 	
-	minimize(fun.f,p[rank].first, p[rank].second,precision,min_ub,minimums, true);
-	  
+		double minimum_received[3] = {0.0};
+	  	MPI_Request reqs[3];
+		MPI_Status status[3];
+		for(int i = 1; i < 4; i++) {
+			MPI_Irecv(&minimum_received[i-1], 7, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &reqs[i-1]);
+		}
+
+		MPI_Bcast(&precision, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&p, 4*sizeof(pair<interval,interval>), MPI_BYTE, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&fun, 1, sizeof(opt_fun_t), 0, MPI_COMM_WORLD);
+	
+		minimize(fun.f,p[rank].first, p[rank].second,precision,min_ub,minimums, true);
+
+		for(int i = 0; i < 3; i++) {
+			MPI_Wait(&reqs[i], &status[i]);
+		}
+	}
+	else{
+		double data[7] = {0.0};
+		MPI_Status status;
+		MPI_Recv(&data, 7, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &status);
+		/**
+		* recuoperation des data et appel a minimize.
+		*/
+		MPI_Send(&min_ub, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+	}
 	// Displaying all potential minimizers
 	copy(minimums.begin(),minimums.end(),
 	ostream_iterator<minimizer>(cout,"\n"));    
